@@ -7,8 +7,9 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, Con
 
 load_dotenv()
 
-TOKEN = os.getenv("TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+TOKEN = os.getenv("TOKEN")  # Bothost подставляет сам
+CHANNEL_ID = -1003542757830  # ← ID ТВОЕГО КАНАЛА
+
 
 ADMINS = [123456789]  # ← твой user_id
 
