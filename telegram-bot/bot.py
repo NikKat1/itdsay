@@ -11,7 +11,7 @@ TOKEN = os.getenv("TOKEN")  # Bothost подставляет сам
 CHANNEL_ID = -1003542757830  # ← ID ТВОЕГО КАНАЛА
 
 
-ADMINS = [123456789]  # ← твой user_id
+ADMINS = [985545005]  # ← твой user_id
 
 COOLDOWN = 3600
 SPAM_LIMIT = 3
