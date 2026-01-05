@@ -2,7 +2,13 @@ import os
 import time
 import sqlite3
 from datetime import datetime
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    CommandHandler,
+    ContextTypes,
+    filters
+)
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
@@ -19,8 +25,7 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     last_sent INTEGER DEFAULT 0,
-    photo_last_sent INTEGER DEFAULT 0,
-    shown_help INTEGER DEFAULT 0
+    photo_last_sent INTEGER DEFAULT 0
 )
 """)
 conn.commit()
@@ -38,6 +43,14 @@ HELP_TEXT = (
     "👑 Владелец бота публикует без ограничений"
 )
 
+# ---------- /start ----------
+async def start(update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        HELP_TEXT,
+        parse_mode="Markdown"
+    )
+
+# ---------- сообщения ----------
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = user.id
@@ -58,23 +71,11 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
             (uid,)
         )
         conn.commit()
-        last_sent = photo_last_sent = shown_help = 0
+        last_sent = photo_last_sent = 0
     else:
-        _, last_sent, photo_last_sent, shown_help = row
+        _, last_sent, photo_last_sent = row
 
-    # 📘 инструкция — один раз
-    if not shown_help and username != OWNER_USERNAME:
-        await update.message.reply_text(
-            HELP_TEXT,
-            parse_mode="Markdown"
-        )
-        cursor.execute(
-            "UPDATE users SET shown_help=1 WHERE user_id=?",
-            (uid,)
-        )
-        conn.commit()
-
-    # 👑 владелец без ограничений
+    # 👑 ты — без ограничений
     if username == OWNER_USERNAME:
         if is_photo:
             await context.bot.send_photo(
@@ -136,7 +137,10 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+
     app.run_polling()
 
 if __name__ == "__main__":
