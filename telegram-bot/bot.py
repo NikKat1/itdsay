@@ -1,16 +1,17 @@
 import os
 import time
 import sqlite3
+from datetime import datetime, timedelta
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-OWNER_USERNAME = "nikkat1"   # ← ТОЛЬКО ТЫ БЕЗ ОГРАНИЧЕНИЙ
+OWNER_USERNAME = "nikkat1"   # ты без ограничений
 
-COOLDOWN = 3600
-SPAM_LIMIT = 3
-MUTE_TIME = 6 * 3600
+COOLDOWN = 3 * 3600          # 3 часа
+SPAM_LIMIT = 3               # предупреждений
+MUTE_TIME = 6 * 3600         # мут 6 часов
 
 conn = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -25,6 +26,10 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 conn.commit()
 
+def format_time(ts: int) -> str:
+    """Возвращает локальное время пользователя"""
+    return datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")
+
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
@@ -35,11 +40,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     if username == OWNER_USERNAME:
         text = update.message.text.strip()
         final_text = f"{text}, итд..."
-
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=final_text
-        )
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=final_text)
         await update.message.reply_text("✅ Опубликовано (без ограничений)")
         return
 
@@ -57,18 +58,33 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     else:
         _, last_sent, spam_count, mute_until = row
 
+    # мут
     if mute_until > now:
-        await update.message.reply_text("🔇 Вы временно замьючены")
+        until = format_time(mute_until)
+        await update.message.reply_text(
+            f"🔇 Вы временно замьючены за спам.\n"
+            f"⏳ Можно писать снова: {until}"
+        )
         return
 
+    # проверка кулдауна
     if now - last_sent < COOLDOWN:
         spam_count += 1
+        next_time = last_sent + COOLDOWN
+        next_time_str = format_time(next_time)
 
         if spam_count >= SPAM_LIMIT:
             mute_until = now + MUTE_TIME
-            await update.message.reply_text("🚫 Мут на 6 часов")
+            mute_str = format_time(mute_until)
+            await update.message.reply_text(
+                f"🚫 Слишком много сообщений.\n"
+                f"🔇 Мут до: {mute_str}"
+            )
         else:
-            await update.message.reply_text("⏳ Можно писать раз в час")
+            await update.message.reply_text(
+                f"⚠️ Ограничение: 1 сообщение раз в 3 часа.\n"
+                f"🕒 Можно отправить снова: {next_time_str}"
+            )
 
         cursor.execute("""
             UPDATE users
@@ -78,13 +94,11 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         return
 
+    # публикация
     text = update.message.text.strip()
     final_text = f"{text}, итд..."
 
-    await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=final_text
-    )
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=final_text)
 
     cursor.execute("""
         UPDATE users
