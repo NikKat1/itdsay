@@ -1,17 +1,10 @@
 import os
 import time
 import sqlite3
-from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
-load_dotenv()
-
-TOKEN = os.getenv("TOKEN")  # Bothost подставляет сам
-CHANNEL_ID = -1003542757830  # ← ID ТВОЕГО КАНАЛА
-
-
-ADMINS = [985545005]  # ← твой user_id
+TOKEN = os.getenv("TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 COOLDOWN = 3600
 SPAM_LIMIT = 3
@@ -25,15 +18,13 @@ CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     last_sent INTEGER,
     spam_count INTEGER DEFAULT 0,
-    mute_until INTEGER DEFAULT 0,
-    banned INTEGER DEFAULT 0
+    mute_until INTEGER DEFAULT 0
 )
 """)
 conn.commit()
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
+async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     now = int(time.time())
 
     cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
@@ -42,15 +33,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row:
         cursor.execute("INSERT INTO users (user_id, last_sent) VALUES (?, ?)", (user_id, 0))
         conn.commit()
-        last_sent = spam_count = mute_until = banned = 0
+        last_sent = spam_count = mute_until = 0
     else:
-        _, last_sent, spam_count, mute_until, banned = row
-
-    if banned:
-        return
+        _, last_sent, spam_count, mute_until = row
 
     if mute_until > now:
-        await update.message.reply_text("🔇 Вы замьючены за спам")
+        await update.message.reply_text("🔇 Вы временно замьючены")
         return
 
     if now - last_sent < COOLDOWN:
@@ -61,18 +49,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⏳ Можно писать раз в час")
 
-        cursor.execute("UPDATE users SET spam_count=?, mute_until=? WHERE user_id=?",
-                       (spam_count, mute_until, user_id))
+        cursor.execute(
+            "UPDATE users SET spam_count=?, mute_until=? WHERE user_id=?",
+            (spam_count, mute_until, user_id)
+        )
         conn.commit()
         return
 
-    await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=f"📨 @{user.username or user.first_name}:\n\n{update.message.text}"
-    )
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=update.message.text)
 
-    cursor.execute("UPDATE users SET last_sent=?, spam_count=0 WHERE user_id=?",
-                   (now, user_id))
+    cursor.execute(
+        "UPDATE users SET last_sent=?, spam_count=0 WHERE user_id=?",
+        (now, user_id)
+    )
     conn.commit()
 
     await update.message.reply_text("✅ Опубликовано")
