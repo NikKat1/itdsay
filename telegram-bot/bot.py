@@ -133,7 +133,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
 
     # 📝 ТЕКСТ
     if now - last_sent < TEXT_COOLDOWN:
-        await update.message.reply_text("⏳ Текст можно отправлять раз в 3 часа.")
+        await update.message.reply_text("⏳ Текст можно отправлять раз в 1 час.")
         return
 
     await context.bot.send_message(
