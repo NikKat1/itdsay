@@ -18,6 +18,7 @@ OWNER_USERNAME = "nikkat1"
 TEXT_COOLDOWN = 3 * 3600
 PHOTO_COOLDOWN = 24 * 3600
 VOICE_COOLDOWN = 24 * 3600
+MAX_VOICE_DURATION = 15  # секунд
 
 conn = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -32,21 +33,23 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 conn.commit()
 
-def fmt(ts):
+def fmt(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")
 
 HELP_TEXT = (
     "ℹ️ *Как работает бот:*\n\n"
     "📝 Текст — 1 раз в 3 часа\n"
     "📸 Фото + текст — 1 раз в 24 часа\n"
-    "🎤 Голос — 1 раз в 24 часа (с расшифровкой)\n\n"
+    "🎤 Голос — 1 раз в 24 часа (до 15 секунд)\n\n"
     "🕶️ Всё публикуется анонимно\n"
-    "➕ В конце добавляется `, итд...`\n"
+    "➕ Подпись у фото и голоса: `, итд...`"
 )
 
-async def start(update, context):
+# ---------- /start ----------
+async def start(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
+# ---------- сообщения ----------
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = user.id
@@ -56,38 +59,31 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     is_photo = bool(update.message.photo)
     is_voice = bool(update.message.voice)
 
-    text = (
-        update.message.text
-        or update.message.caption
-        or ""
-    ).strip()
+    text = (update.message.text or update.message.caption or "").strip()
 
     cursor.execute("SELECT * FROM users WHERE user_id=?", (uid,))
     row = cursor.fetchone()
 
     if not row:
-        cursor.execute(
-            "INSERT INTO users (user_id) VALUES (?)",
-            (uid,)
-        )
+        cursor.execute("INSERT INTO users (user_id) VALUES (?)", (uid,))
         conn.commit()
         last_sent = photo_last_sent = voice_last_sent = 0
     else:
         _, last_sent, photo_last_sent, voice_last_sent = row
 
-    # 👑 Владелец — без ограничений
+    # 👑 ВЛАДЕЛЕЦ — БЕЗ ОГРАНИЧЕНИЙ
     if username == OWNER_USERNAME:
         if is_voice:
-            voice_text = text or "🎤 Голосовое сообщение"
-            await context.bot.send_message(
+            await context.bot.send_voice(
                 chat_id=CHANNEL_ID,
-                text=f"{voice_text}, итд..."
+                voice=update.message.voice.file_id,
+                caption=", итд..."
             )
         elif is_photo:
             await context.bot.send_photo(
                 chat_id=CHANNEL_ID,
                 photo=update.message.photo[-1].file_id,
-                caption=f"{text}, итд..." if text else None
+                caption=f"{text}, итд..." if text else ", итд..."
             )
         else:
             await context.bot.send_message(
@@ -98,6 +94,15 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
 
     # 🎤 ГОЛОС
     if is_voice:
+        duration = update.message.voice.duration
+
+        if duration > MAX_VOICE_DURATION:
+            await update.message.reply_text(
+                "⛔ Голосовое слишком длинное.\n"
+                "Максимум — 15 секунд."
+            )
+            return
+
         if now - voice_last_sent < VOICE_COOLDOWN:
             await update.message.reply_text(
                 f"🎤 Голос можно отправлять раз в 24 часа.\n"
@@ -105,17 +110,10 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        voice_text = text
-        if not voice_text:
-            await update.message.reply_text(
-                "❌ Не удалось распознать речь.\n"
-                "Включи расшифровку голосовых в Telegram."
-            )
-            return
-
-        await context.bot.send_message(
+        await context.bot.send_voice(
             chat_id=CHANNEL_ID,
-            text=f"{voice_text}, итд..."
+            voice=update.message.voice.file_id,
+            caption=", итд..."
         )
 
         cursor.execute(
@@ -131,7 +129,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     if is_photo:
         if now - photo_last_sent < PHOTO_COOLDOWN:
             await update.message.reply_text(
-                f"📸 Фото можно раз в 24 часа.\n"
+                f"📸 Фото можно отправлять раз в 24 часа.\n"
                 f"🕒 Можно снова: {fmt(photo_last_sent + PHOTO_COOLDOWN)}"
             )
             return
@@ -139,7 +137,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_photo(
             chat_id=CHANNEL_ID,
             photo=update.message.photo[-1].file_id,
-            caption=f"{text}, итд..." if text else None
+            caption=f"{text}, итд..." if text else ", итд..."
         )
 
         cursor.execute(
@@ -154,7 +152,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     # 📝 ТЕКСТ
     if now - last_sent < TEXT_COOLDOWN:
         await update.message.reply_text(
-            f"📝 Текст раз в 3 часа.\n"
+            f"📝 Текст можно отправлять раз в 3 часа.\n"
             f"🕒 Можно снова: {fmt(last_sent + TEXT_COOLDOWN)}"
         )
         return
