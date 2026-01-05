@@ -6,9 +6,11 @@ from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filte
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-COOLDOWN = 3600          # 1 час
-SPAM_LIMIT = 3           # попытки
-MUTE_TIME = 6 * 3600     # мут 6 часов
+OWNER_USERNAME = "nikkat1"   # ← ТОЛЬКО ТЫ БЕЗ ОГРАНИЧЕНИЙ
+
+COOLDOWN = 3600
+SPAM_LIMIT = 3
+MUTE_TIME = 6 * 3600
 
 conn = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -24,9 +26,24 @@ CREATE TABLE IF NOT EXISTS users (
 conn.commit()
 
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user = update.effective_user
+    user_id = user.id
+    username = user.username
     now = int(time.time())
 
+    # ---------- ТЫ (БЕЗ ОГРАНИЧЕНИЙ) ----------
+    if username == OWNER_USERNAME:
+        text = update.message.text.strip()
+        final_text = f"{text}, итд..."
+
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=final_text
+        )
+        await update.message.reply_text("✅ Опубликовано (без ограничений)")
+        return
+
+    # ---------- ВСЕ ОСТАЛЬНЫЕ ----------
     cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
     row = cursor.fetchone()
 
@@ -61,10 +78,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         return
 
-    # --- АНОНИМНАЯ ПУБЛИКАЦИЯ ---
     text = update.message.text.strip()
-
-    # добавляем ", итд..." в конец
     final_text = f"{text}, итд..."
 
     await context.bot.send_message(
