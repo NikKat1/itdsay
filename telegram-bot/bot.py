@@ -1,17 +1,16 @@
 import os
 import time
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-OWNER_USERNAME = "nikkat1"   # ты без ограничений
+OWNER_USERNAME = "nikkat1"
 
-COOLDOWN = 3 * 3600          # 3 часа
-SPAM_LIMIT = 3               # предупреждений
-MUTE_TIME = 6 * 3600         # мут 6 часов
+TEXT_COOLDOWN = 3 * 3600
+PHOTO_COOLDOWN = 24 * 3600
 
 conn = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -19,99 +18,125 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
-    last_sent INTEGER,
-    spam_count INTEGER DEFAULT 0,
-    mute_until INTEGER DEFAULT 0
+    last_sent INTEGER DEFAULT 0,
+    photo_last_sent INTEGER DEFAULT 0,
+    shown_help INTEGER DEFAULT 0
 )
 """)
 conn.commit()
 
-def format_time(ts: int) -> str:
-    """Возвращает локальное время пользователя"""
+def fmt(ts):
     return datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")
+
+HELP_TEXT = (
+    "ℹ️ *Как работает бот:*\n\n"
+    "📝 *Текст* — можно отправлять раз в *3 часа*\n"
+    "📸 *Фото + текст* — можно отправлять раз в *24 часа*\n\n"
+    "⛔ Спам запрещён\n"
+    "🕶️ Все сообщения публикуются *анонимно*\n"
+    "➕ В конце сообщения автоматически добавляется `, итд...`\n\n"
+    "👑 Владелец бота публикует без ограничений"
+)
 
 async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_id = user.id
+    uid = user.id
     username = user.username
     now = int(time.time())
 
-    # ---------- ТЫ (БЕЗ ОГРАНИЧЕНИЙ) ----------
-    if username == OWNER_USERNAME:
-        text = update.message.text.strip()
-        final_text = f"{text}, итд..."
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=final_text)
-        await update.message.reply_text("✅ Опубликовано (без ограничений)")
-        return
+    text = update.message.caption or update.message.text or ""
+    text = text.strip()
+    final_text = f"{text}, итд..." if text else None
+    is_photo = bool(update.message.photo)
 
-    # ---------- ВСЕ ОСТАЛЬНЫЕ ----------
-    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT * FROM users WHERE user_id=?", (uid,))
     row = cursor.fetchone()
 
     if not row:
         cursor.execute(
-            "INSERT INTO users (user_id, last_sent) VALUES (?, ?)",
-            (user_id, 0)
+            "INSERT INTO users (user_id) VALUES (?)",
+            (uid,)
         )
         conn.commit()
-        last_sent = spam_count = mute_until = 0
+        last_sent = photo_last_sent = shown_help = 0
     else:
-        _, last_sent, spam_count, mute_until = row
+        _, last_sent, photo_last_sent, shown_help = row
 
-    # мут
-    if mute_until > now:
-        until = format_time(mute_until)
+    # 📘 инструкция — один раз
+    if not shown_help and username != OWNER_USERNAME:
         await update.message.reply_text(
-            f"🔇 Вы временно замьючены за спам.\n"
-            f"⏳ Можно писать снова: {until}"
+            HELP_TEXT,
+            parse_mode="Markdown"
         )
-        return
+        cursor.execute(
+            "UPDATE users SET shown_help=1 WHERE user_id=?",
+            (uid,)
+        )
+        conn.commit()
 
-    # проверка кулдауна
-    if now - last_sent < COOLDOWN:
-        spam_count += 1
-        next_time = last_sent + COOLDOWN
-        next_time_str = format_time(next_time)
-
-        if spam_count >= SPAM_LIMIT:
-            mute_until = now + MUTE_TIME
-            mute_str = format_time(mute_until)
-            await update.message.reply_text(
-                f"🚫 Слишком много сообщений.\n"
-                f"🔇 Мут до: {mute_str}"
+    # 👑 владелец без ограничений
+    if username == OWNER_USERNAME:
+        if is_photo:
+            await context.bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=update.message.photo[-1].file_id,
+                caption=final_text
             )
         else:
-            await update.message.reply_text(
-                f"⚠️ Ограничение: 1 сообщение раз в 3 часа.\n"
-                f"🕒 Можно отправить снова: {next_time_str}"
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=final_text
             )
-
-        cursor.execute("""
-            UPDATE users
-            SET spam_count=?, mute_until=?
-            WHERE user_id=?
-        """, (spam_count, mute_until, user_id))
-        conn.commit()
         return
 
-    # публикация
-    text = update.message.text.strip()
-    final_text = f"{text}, итд..."
+    # 📸 фото
+    if is_photo:
+        if now - photo_last_sent < PHOTO_COOLDOWN:
+            await update.message.reply_text(
+                f"⚠️ Фото можно отправлять раз в 24 часа.\n"
+                f"🕒 Можно снова: {fmt(photo_last_sent + PHOTO_COOLDOWN)}"
+            )
+            return
 
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=final_text)
+        await context.bot.send_photo(
+            chat_id=CHANNEL_ID,
+            photo=update.message.photo[-1].file_id,
+            caption=final_text
+        )
 
-    cursor.execute("""
-        UPDATE users
-        SET last_sent=?, spam_count=0
-        WHERE user_id=?
-    """, (now, user_id))
+        cursor.execute(
+            "UPDATE users SET photo_last_sent=? WHERE user_id=?",
+            (now, uid)
+        )
+        conn.commit()
+
+        await update.message.reply_text("✅ Фото опубликовано анонимно")
+        return
+
+    # 📝 текст
+    if now - last_sent < TEXT_COOLDOWN:
+        await update.message.reply_text(
+            f"⚠️ Текст можно отправлять раз в 3 часа.\n"
+            f"🕒 Можно снова: {fmt(last_sent + TEXT_COOLDOWN)}"
+        )
+        return
+
+    await context.bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=final_text
+    )
+
+    cursor.execute(
+        "UPDATE users SET last_sent=? WHERE user_id=?",
+        (now, uid)
+    )
     conn.commit()
 
     await update.message.reply_text("✅ Опубликовано анонимно")
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
     app.run_polling()
 
 if __name__ == "__main__":
