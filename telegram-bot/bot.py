@@ -1,7 +1,6 @@
 import os
 import time
 import sqlite3
-from datetime import datetime
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
@@ -32,9 +31,6 @@ CREATE TABLE IF NOT EXISTS users (
 )
 """)
 conn.commit()
-
-def fmt(ts: int) -> str:
-    return datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")
 
 HELP_TEXT = (
     "ℹ️ *Правила:*\n\n"
@@ -96,10 +92,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if now - voice_last_sent < VOICE_COOLDOWN:
-            await update.message.reply_text(
-                f"🎤 Голос можно раз в 24 часа.\n"
-                f"🕒 Можно снова: {fmt(voice_last_sent + VOICE_COOLDOWN)}"
-            )
+            await update.message.reply_text("⏳ Голос можно отправлять раз в 24 часа.")
             return
 
         await context.bot.send_voice(
@@ -120,10 +113,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     # 📸 ФОТО
     if is_photo:
         if now - photo_last_sent < PHOTO_COOLDOWN:
-            await update.message.reply_text(
-                f"📸 Фото можно раз в 24 часа.\n"
-                f"🕒 Можно снова: {fmt(photo_last_sent + PHOTO_COOLDOWN)}"
-            )
+            await update.message.reply_text("⏳ Фото можно отправлять раз в 24 часа.")
             return
 
         await context.bot.send_photo(
@@ -143,10 +133,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
 
     # 📝 ТЕКСТ
     if now - last_sent < TEXT_COOLDOWN:
-        await update.message.reply_text(
-            f"📝 Текст можно раз в 3 часа.\n"
-            f"🕒 Можно снова: {fmt(last_sent + TEXT_COOLDOWN)}"
-        )
+        await update.message.reply_text("⏳ Текст можно отправлять раз в 3 часа.")
         return
 
     await context.bot.send_message(
