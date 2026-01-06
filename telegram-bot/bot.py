@@ -12,13 +12,15 @@ from telegram.ext import (
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-OWNER_ID = 985545005
+OWNER_ID = 985545005  # твой Telegram ID
 
-TEXT_COOLDOWN = 1 * 3600
-PHOTO_COOLDOWN = 24 * 3600
-VOICE_COOLDOWN = 24 * 3600
-MAX_VOICE_DURATION = 15
+# ⏱ ЛИМИТЫ
+TEXT_COOLDOWN = 3600          # 1 час
+PHOTO_COOLDOWN = 24 * 3600    # 24 часа
+VOICE_COOLDOWN = 24 * 3600    # 24 часа (для голосовых и аудио)
+MAX_VOICE_DURATION = 15       # 15 секунд
 
+# 📦 БАЗА ДАННЫХ
 conn = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -32,11 +34,13 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 conn.commit()
 
+# 📜 ПРАВИЛА
 HELP_TEXT = (
     "ℹ️ *Правила:*\n\n"
     "📝 Текст — 1 раз в 1 час\n"
     "📸 Фото + текст — 1 раз в 24 часа\n"
-    "🎤 Голос — 1 раз в 24 часа (до 15 сек)\n\n"
+    "🎤 Голос — 1 раз в 24 часа (до 15 сек)\n"
+    "🎵 Аудио-файл — 1 раз в 24 часа (до 15 сек)\n\n"
     "🕶️ Все сообщения публикуются анонимно\n"
     "➕ К сообщениям добавляется `, итд...`"
 )
@@ -51,6 +55,7 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
 
     is_photo = bool(update.message.photo)
     is_voice = bool(update.message.voice)
+    is_audio = bool(update.message.audio)
     text = (update.message.text or update.message.caption or "").strip()
 
     cursor.execute("SELECT * FROM users WHERE user_id=?", (uid,))
@@ -63,12 +68,18 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
     else:
         _, last_sent, photo_last_sent, voice_last_sent = row
 
-    # 👑 ТЫ — БЕЗ ОГРАНИЧЕНИЙ
+    # 👑 ВЛАДЕЛЕЦ БЕЗ ОГРАНИЧЕНИЙ
     if uid == OWNER_ID:
         if is_voice:
             await context.bot.send_voice(
                 CHANNEL_ID,
                 update.message.voice.file_id,
+                caption=", итд..."
+            )
+        elif is_audio:
+            await context.bot.send_audio(
+                CHANNEL_ID,
+                update.message.audio.file_id,
                 caption=", итд..."
             )
         elif is_photo:
@@ -108,6 +119,31 @@ async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
 
         await update.message.reply_text("✅ Голосовое опубликовано")
+        return
+
+    # 🎵 АУДИО-ФАЙЛ
+    if is_audio:
+        if update.message.audio.duration > MAX_VOICE_DURATION:
+            await update.message.reply_text("⛔ Аудио-файл больше 15 секунд.")
+            return
+
+        if now - voice_last_sent < VOICE_COOLDOWN:
+            await update.message.reply_text("⏳ Аудио можно отправлять раз в 24 часа.")
+            return
+
+        await context.bot.send_audio(
+            CHANNEL_ID,
+            update.message.audio.file_id,
+            caption=", итд..."
+        )
+
+        cursor.execute(
+            "UPDATE users SET voice_last_sent=? WHERE user_id=?",
+            (now, uid)
+        )
+        conn.commit()
+
+        await update.message.reply_text("✅ Аудио опубликовано")
         return
 
     # 📸 ФОТО
