@@ -11,23 +11,28 @@ from telegram.ext import (
     filters
 )
 
+# --- НАСТРОЙКИ ---
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+OWNER_ID = 985545005 
 
-OWNER_ID = 985545005  # твой Telegram ID
-
-# ⏱ ЛИМИТЫ
+# ⏱ ЛИМИТЫ (в секундах)
 TEXT_COOLDOWN = 3600
 PHOTO_COOLDOWN = 24 * 3600
 VOICE_COOLDOWN = 24 * 3600
 VIDEO_COOLDOWN = 24 * 3600
-MAX_VOICE_DURATION = 15
-MAX_VIDEO_DURATION = 10
+GIF_COOLDOWN = 24 * 3600
+AUDIO_COOLDOWN = 24 * 3600
 
-# 📦 БАЗА
+MAX_VOICE_DURATION = 15
+MAX_VIDEO_DURATION = 60
+MAX_GIF_DURATION = 60
+
+# --- БАЗА ДАННЫХ ---
 conn = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
 
+# Создаем таблицу, если её нет
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
@@ -35,193 +40,156 @@ CREATE TABLE IF NOT EXISTS users (
     photo_last_sent INTEGER DEFAULT 0,
     voice_last_sent INTEGER DEFAULT 0,
     video_last_sent INTEGER DEFAULT 0,
+    gif_last_sent INTEGER DEFAULT 0,
+    audio_last_sent INTEGER DEFAULT 0,
     banned INTEGER DEFAULT 0
 )
 """)
+
+# Проверка и добавление недостающих колонок (защита от ValueError)
+cursor.execute("PRAGMA table_info(users)")
+existing_columns = [column[1] for column in cursor.fetchall()]
+for col in ["gif_last_sent", "audio_last_sent"]:
+    if col not in existing_columns:
+        cursor.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT 0")
 conn.commit()
 
-# 📜 ПРАВИЛА
+# --- ТЕКСТЫ ---
 HELP_TEXT = (
     "ℹ️ *Правила:*\n\n"
     "📝 Текст — 1 раз в 1 час\n"
     "📸 Фото — 1 раз в 24 часа\n"
     "🎤 Голос — 1 раз в 24 часа (до 15 сек)\n"
-    "🎵 Аудио — 1 раз в 24 часа (до 15 сек)\n"
-    "🎬 Видео — 1 раз в 24 часа (до 10 сек)\n\n"
-    "🕶️ Все сообщения публикуются анонимно\n"
-    "🚫 За нарушения пользователь блокируется\n"
-    "➕ К сообщениям добавляется `, итд...`"
+    "🎬 Видео — 1 раз в 24 часа (до 1 мин)\n"
+    "🖼 GIF — 1 раз в 24 часа (до 1 мин)\n"
+    "🎵 Музыка — 1 раз в 24 часа\n\n"
+    "🕶️ Все сообщения анонимны\n"
+    "🚫 За нарушения — бан\n"
+    "➕ Добавляется `, итд...`"
 )
 
-async def start(update, context: ContextTypes.DEFAULT_TYPE):
+# --- ФУНКЦИИ ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
-# 👑 ПРОВЕРКА БАНА
-def is_banned(uid):
-    cursor.execute("SELECT banned FROM users WHERE user_id=?", (uid,))
-    row = cursor.fetchone()
-    return row and row[0] == 1
-
-# 👁 ЛОГ ВЛАДЕЛЬЦУ + КНОПКА
 async def log_to_owner(context, user, content_type):
     username = f"@{user.username}" if user.username else "нет"
     text = (
-        "👁 Новый анонимный пост\n\n"
+        f"👁 Новый анонимный пост\n\n"
         f"👤 Имя: {user.first_name}\n"
         f"🆔 ID: {user.id}\n"
         f"🔗 Username: {username}\n"
         f"📦 Тип: {content_type}"
     )
-
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🚫 Заблокировать", callback_data=f"ban:{user.id}")],
         [InlineKeyboardButton("🔓 Разблокировать", callback_data=f"unban:{user.id}")]
     ])
+    await context.bot.send_message(OWNER_ID, text, reply_markup=keyboard)
 
-    await context.bot.send_message(
-        OWNER_ID,
-        text,
-        reply_markup=keyboard
-    )
-
-# 🚫 ОБРАБОТКА КНОПОК
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if query.from_user.id != OWNER_ID: return
+    
+    action, uid = query.data.split(":")
+    is_banned = 1 if action == "ban" else 0
+    cursor.execute("UPDATE users SET banned=? WHERE user_id=?", (is_banned, uid))
+    conn.commit()
+    await query.edit_message_text(f"✅ Пользователь {uid}: {'забанен' if is_banned else 'разбанен'}")
 
-    if query.from_user.id != OWNER_ID:
-        return
-
-    data = query.data
-    action, uid = data.split(":")
-    uid = int(uid)
-
-    if action == "ban":
-        cursor.execute("UPDATE users SET banned=1 WHERE user_id=?", (uid,))
-        conn.commit()
-        await query.edit_message_text(f"🚫 Пользователь {uid} заблокирован")
-
-    elif action == "unban":
-        cursor.execute("UPDATE users SET banned=0 WHERE user_id=?", (uid,))
-        conn.commit()
-        await query.edit_message_text(f"🔓 Пользователь {uid} разблокирован")
-
-async def handle_message(update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    m = update.message
+    if not m or not m.from_user: return
+    user = m.from_user
     uid = user.id
     now = int(time.time())
 
-    is_photo = bool(update.message.photo)
-    is_voice = bool(update.message.voice)
-    is_audio = bool(update.message.audio)
-    is_video = bool(update.message.video)
-    text = (update.message.text or update.message.caption or "").strip()
-
+    # Получаем данные пользователя безопасно через словарь
     cursor.execute("SELECT * FROM users WHERE user_id=?", (uid,))
     row = cursor.fetchone()
-
+    
     if not row:
         cursor.execute("INSERT INTO users (user_id) VALUES (?)", (uid,))
         conn.commit()
-        last_sent = photo_last_sent = voice_last_sent = video_last_sent = banned = 0
+        user_data = {"last_sent": 0, "photo_last_sent": 0, "voice_last_sent": 0, 
+                     "video_last_sent": 0, "gif_last_sent": 0, "audio_last_sent": 0, "banned": 0}
     else:
-        _, last_sent, photo_last_sent, voice_last_sent, video_last_sent, banned = row
+        cursor.execute("PRAGMA table_info(users)")
+        cols = [c[1] for c in cursor.fetchall()]
+        user_data = dict(zip(cols, row))
 
-    # 🚫 ЕСЛИ ЗАБАНЕН
-    if banned:
-        return
+    if user_data.get("banned"): return
 
-    # 👑 ВЛАДЕЛЕЦ БЕЗ ОГРАНИЧЕНИЙ
-    if uid == OWNER_ID:
-        if is_voice:
-            await context.bot.send_voice(CHANNEL_ID, update.message.voice.file_id, caption=", итд...")
-        elif is_audio:
-            await context.bot.send_audio(CHANNEL_ID, update.message.audio.file_id, caption=", итд...")
-        elif is_video:
-            await context.bot.send_video(CHANNEL_ID, update.message.video.file_id, caption=f"{text}, итд..." if text else ", итд...")
-        elif is_photo:
-            await context.bot.send_photo(CHANNEL_ID, update.message.photo[-1].file_id, caption=f"{text}, итд..." if text else ", итд...")
-        else:
-            await context.bot.send_message(CHANNEL_ID, f"{text}, итд...")
-        await update.message.reply_text("✅ Опубликовано")
-        return
+    # Проверка на админа
+    is_admin = (uid == OWNER_ID)
+    text_content = (m.text or m.caption or "").strip()
+    caption = f"{text_content}, итд..." if text_content else ", итд..."
 
-    # 🎤 ГОЛОС
-    if is_voice:
-        if update.message.voice.duration > MAX_VOICE_DURATION:
-            await update.message.reply_text("⛔ Голос больше 15 секунд.")
-            return
-        if now - voice_last_sent < VOICE_COOLDOWN:
-            await update.message.reply_text("⏳ Голос можно раз в 24 часа.")
-            return
+    sent_flag = False
+    content_name = ""
 
-        await context.bot.send_voice(CHANNEL_ID, update.message.voice.file_id, caption=", итд...")
-        await log_to_owner(context, user, "Голос")
-
+    # --- ЛОГИКА ОТПРАВКИ ---
+    
+    # ГОЛОС
+    if m.voice:
+        if not is_admin:
+            if m.voice.duration > MAX_VOICE_DURATION:
+                return await m.reply_text("⛔ Голос больше 15 секунд.")
+            if now - user_data.get('voice_last_sent', 0) < VOICE_COOLDOWN:
+                return await m.reply_text("⏳ Голос можно раз в 24 часа.")
+        await context.bot.send_voice(CHANNEL_ID, m.voice.file_id, caption=", итд...")
         cursor.execute("UPDATE users SET voice_last_sent=? WHERE user_id=?", (now, uid))
-        conn.commit()
-        await update.message.reply_text("✅ Голосовое опубликовано")
-        return
+        sent_flag, content_name = True, "Голос"
 
-    # 🎵 АУДИО
-    if is_audio:
-        if update.message.audio.duration > MAX_VOICE_DURATION:
-            await update.message.reply_text("⛔ Аудио больше 15 секунд.")
-            return
-        if now - voice_last_sent < VOICE_COOLDOWN:
-            await update.message.reply_text("⏳ Аудио можно раз в 24 часа.")
-            return
+    # МУЗЫКА
+    elif m.audio:
+        if not is_admin and (now - user_data.get('audio_last_sent', 0) < AUDIO_COOLDOWN):
+            return await m.reply_text("⏳ Музыку можно раз в 24 часа.")
+        await context.bot.send_audio(CHANNEL_ID, m.audio.file_id, caption=caption)
+        cursor.execute("UPDATE users SET audio_last_sent=? WHERE user_id=?", (now, uid))
+        sent_flag, content_name = True, "Музыка"
 
-        await context.bot.send_audio(CHANNEL_ID, update.message.audio.file_id, caption=", итд...")
-        await log_to_owner(context, user, "Аудио")
-
-        cursor.execute("UPDATE users SET voice_last_sent=? WHERE user_id=?", (now, uid))
-        conn.commit()
-        await update.message.reply_text("✅ Аудио опубликовано")
-        return
-
-    # 🎬 ВИДЕО
-    if is_video:
-        if update.message.video.duration > MAX_VIDEO_DURATION:
-            await update.message.reply_text("⛔ Видео больше 10 секунд.")
-            return
-        if now - video_last_sent < VIDEO_COOLDOWN:
-            await update.message.reply_text("⏳ Видео можно раз в 24 часа.")
-            return
-
-        await context.bot.send_video(CHANNEL_ID, update.message.video.file_id, caption=f"{text}, итд..." if text else ", итд...")
-        await log_to_owner(context, user, "Видео")
-
+    # ВИДЕО
+    elif m.video:
+        if not is_admin:
+            if m.video.duration > MAX_VIDEO_DURATION:
+                return await m.reply_text("⛔ Видео больше 1 минуты.")
+            if now - user_data.get('video_last_sent', 0) < VIDEO_COOLDOWN:
+                return await m.reply_text("⏳ Видео можно раз в 24 часа.")
+        await context.bot.send_video(CHANNEL_ID, m.video.file_id, caption=caption)
         cursor.execute("UPDATE users SET video_last_sent=? WHERE user_id=?", (now, uid))
-        conn.commit()
-        await update.message.reply_text("✅ Видео опубликовано")
-        return
+        sent_flag, content_name = True, "Видео"
 
-    # 📸 ФОТО
-    if is_photo:
-        if now - photo_last_sent < PHOTO_COOLDOWN:
-            await update.message.reply_text("⏳ Фото можно раз в 24 часа.")
-            return
+    # GIF
+    elif m.animation:
+        if not is_admin and (now - user_data.get('gif_last_sent', 0) < GIF_COOLDOWN):
+            return await m.reply_text("⏳ GIF можно раз в 24 часа.")
+        await context.bot.send_animation(CHANNEL_ID, m.animation.file_id, caption=caption)
+        cursor.execute("UPDATE users SET gif_last_sent=? WHERE user_id=?", (now, uid))
+        sent_flag, content_name = True, "GIF"
 
-        await context.bot.send_photo(CHANNEL_ID, update.message.photo[-1].file_id, caption=f"{text}, итд..." if text else ", итд...")
-        await log_to_owner(context, user, "Фото")
-
+    # ФОТО
+    elif m.photo:
+        if not is_admin and (now - user_data.get('photo_last_sent', 0) < PHOTO_COOLDOWN):
+            return await m.reply_text("⏳ Фото можно раз в 24 часа.")
+        await context.bot.send_photo(CHANNEL_ID, m.photo[-1].file_id, caption=caption)
         cursor.execute("UPDATE users SET photo_last_sent=? WHERE user_id=?", (now, uid))
+        sent_flag, content_name = True, "Фото"
+
+    # ПРОСТО ТЕКСТ
+    elif text_content:
+        if not is_admin and (now - user_data.get('last_sent', 0) < TEXT_COOLDOWN):
+            return await m.reply_text("⏳ Текст можно раз в 1 час.")
+        await context.bot.send_message(CHANNEL_ID, f"{text_content}, итд...")
+        cursor.execute("UPDATE users SET last_sent=? WHERE user_id=?", (now, uid))
+        sent_flag, content_name = True, "Текст"
+
+    if sent_flag:
         conn.commit()
-        await update.message.reply_text("✅ Фото опубликовано")
-        return
-
-    # 📝 ТЕКСТ
-    if now - last_sent < TEXT_COOLDOWN:
-        await update.message.reply_text("⏳ Текст можно раз в 1 час.")
-        return
-
-    await context.bot.send_message(CHANNEL_ID, f"{text}, итд...")
-    await log_to_owner(context, user, "Текст")
-
-    cursor.execute("UPDATE users SET last_sent=? WHERE user_id=?", (now, uid))
-    conn.commit()
-    await update.message.reply_text("✅ Опубликовано")
+        if not is_admin: 
+            await log_to_owner(context, user, content_name)
+        await m.reply_text(f"✅ {content_name} опубликовано")
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
