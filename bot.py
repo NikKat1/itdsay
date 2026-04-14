@@ -12,7 +12,7 @@ from telegram.ext import (
 )
 
 # --- НАСТРОЙКИ ---
-TOKEN = os.getenv("TOKEN")
+API_TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = 985545005 
 
