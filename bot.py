@@ -16,10 +16,10 @@ API_TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 OWNER_ID = 985545005 
 
-# Путь к БД в папке data для BotHost
-DB_PATH = "data/database.db"
+# Путь к БД в папке data для сохранения данных на BotHost
+DB_PATH = "data/flpepe.db"
 
-# Создаем папку data, если пользователь забыл
+# Создаем папку data, если она отсутствует
 if not os.path.exists("data"):
     os.makedirs("data")
 
@@ -132,7 +132,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent_flag = False
     content_name = ""
 
-    # ГОЛОС
     if m.voice:
         if not is_admin:
             if m.voice.duration > MAX_VOICE_DURATION:
@@ -143,7 +142,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("UPDATE users SET voice_last_sent=? WHERE user_id=?", (now, uid))
         sent_flag, content_name = True, "Голос"
 
-    # МУЗЫКА
     elif m.audio:
         if not is_admin and (now - user_data.get('audio_last_sent', 0) < AUDIO_COOLDOWN):
             return await m.reply_text("⏳ Музыку можно раз в 24 часа.")
@@ -151,7 +149,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("UPDATE users SET audio_last_sent=? WHERE user_id=?", (now, uid))
         sent_flag, content_name = True, "Музыка"
 
-    # ВИДЕО
     elif m.video:
         if not is_admin:
             if m.video.duration > MAX_VIDEO_DURATION:
@@ -162,7 +159,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("UPDATE users SET video_last_sent=? WHERE user_id=?", (now, uid))
         sent_flag, content_name = True, "Видео"
 
-    # GIF
     elif m.animation:
         if not is_admin and (now - user_data.get('gif_last_sent', 0) < GIF_COOLDOWN):
             return await m.reply_text("⏳ GIF можно раз в 24 часа.")
@@ -170,7 +166,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("UPDATE users SET gif_last_sent=? WHERE user_id=?", (now, uid))
         sent_flag, content_name = True, "GIF"
 
-    # ФОТО
     elif m.photo:
         if not is_admin and (now - user_data.get('photo_last_sent', 0) < PHOTO_COOLDOWN):
             return await m.reply_text("⏳ Фото можно раз в 24 часа.")
@@ -178,7 +173,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("UPDATE users SET photo_last_sent=? WHERE user_id=?", (now, uid))
         sent_flag, content_name = True, "Фото"
 
-    # ПРОСТО ТЕКСТ
     elif text_content:
         if not is_admin and (now - user_data.get('last_sent', 0) < TEXT_COOLDOWN):
             return await m.reply_text("⏳ Текст можно раз в 1 час.")
@@ -193,7 +187,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await m.reply_text(f"✅ {content_name} опубликовано")
 
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    # Исправлено: теперь используем API_TOKEN
+    app = ApplicationBuilder().token(API_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_buttons))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
